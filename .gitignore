@@ -1,3 +1,8 @@
 trash/*
 .vscode/*
 .ipynb_checkpoints/*
+a.out
+out_approx.txt
+out_ground.txt
+run.sh
+clr.sh

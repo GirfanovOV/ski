@@ -278,13 +278,13 @@ void apply_A(double **w, double **w1)
 
     // inner points
     for(int i=1; i <= (M-1); ++i)
-        for(int j=2; j <= (N-1); ++j)
+        for(int j=1; j <= (N-1); ++j)
             w1[i][j] = main_eq(w, i, j);
 }
 
 double max_norm(double **w)
 {
-    double norm = std::abs(w[2][2]);
+    double norm = std::abs(w[0][0]);
     for(int i=0; i <= M; ++i)
         for(int j=0; j <= N; ++j)
             norm = std::max(norm, std::abs(w[i][j]));
@@ -313,7 +313,6 @@ int main(int argc, char **argv)
     double **corr = new double *[M+1];
     fill_corr(corr);
     
-    // answ
     double **w = new double *[M+1];
     init_ndim_array(w);
 
@@ -329,12 +328,11 @@ int main(int argc, char **argv)
     double **tmp = new double *[M+1];
     init_ndim_array(tmp);
 
-    // error array
     double **r = new double *[M+1];
     init_ndim_array(r);
 
     // main loop
-    for(size_t it=0; it < 20; ++it)
+    for(size_t it=0; it < 100; ++it)
     {
         apply_A(w, Aw); // 
         matrx_sub(Aw, corr, r);
@@ -349,9 +347,10 @@ int main(int argc, char **argv)
         matrx_sub(w_1, w, tmp);
         // double err = sqrt(dot_prod(tmp, tmp));
         double err = max_norm(tmp);
-        std::cout << "Iter " << it << " : " << err << std::endl;
+        if(it % 5 == 0)
+            std::cout << "Iter " << it << " : " << err << std::endl;
         std::swap(w, w_1);
-        // if (err < eps) break;
+        if (err < eps) break;
     }
 
     // std::ofstream out_apporx("out_approx.txt");
