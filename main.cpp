@@ -2,6 +2,7 @@
 #include <iostream>
 #include <cstdlib>
 #include <fstream>
+#include <chrono>
 // #include <mpi.h>
 
 #define A_1 (double)-1
@@ -294,6 +295,8 @@ double max_norm(double **w)
 
 int main(int argc, char **argv)
 {
+    auto start = std::chrono::steady_clock::now();
+
     if (argc != 3) return 1;
     M = atoi(argv[1]);
     N = atoi(argv[2]);
@@ -331,8 +334,28 @@ int main(int argc, char **argv)
     double **r = new double *[M+1];
     init_ndim_array(r);
 
+    /// testing /////////////////////////
+    for(int i=0; i <= M; ++i)
+        for(int j=0; j <= N; ++j)
+            w[i][j] = u(i,j);
+
+
+    apply_A(w, Aw);
+    matrx_sub(Aw, corr, r);
+
+    double t_max = std::abs(r[1][1]);
+    for(int i=1; i <= (M-1); ++i)
+        for(int j=1; j <= (N-1); ++j)
+            t_max = std::max(t_max, std::abs(r[i][j]));
+
+
+    std::cout << "Max error : " << t_max << std::endl;
+    return 0;
+    /// testing /////////////////////////
+
+
     // main loop
-    for(size_t it=0; it < 100; ++it)
+    for(size_t it=0; it < 50000; ++it)
     {
         apply_A(w, Aw); // 
         matrx_sub(Aw, corr, r);
@@ -345,27 +368,32 @@ int main(int argc, char **argv)
                 w_1[i][j] = w[i][j] - tau * r[i][j];
 
         matrx_sub(w_1, w, tmp);
-        // double err = sqrt(dot_prod(tmp, tmp));
-        double err = max_norm(tmp);
-        if(it % 5 == 0)
+        double err = sqrt(dot_prod(tmp, tmp));
+        // double err = max_norm(tmp);
+        if(it % 1000 == 0)
             std::cout << "Iter " << it << " : " << err << std::endl;
         std::swap(w, w_1);
         if (err < eps) break;
     }
 
-    // std::ofstream out_apporx("out_approx.txt");
-    // std::ofstream out_ground("out_ground.txt");
 
-    // for(int i=0; i <= M; ++i)
-    // {
-    //     for(int j=0; j <= N; ++j)
-    //     {
-    //         out_apporx << w[i][j] << " ";
-    //         out_ground << F(i,j) << " ";
-    //     }
-    //     out_apporx << std::endl;
-    //     out_ground << std::endl;
-    // }
+    auto end = std::chrono::steady_clock::now();
+    std::cout << "Time taken (ms) : ";
+    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() << std::endl;
+
+    std::ofstream out_apporx("garbage/out_approx.txt");
+    std::ofstream out_ground("garbage/out_ground.txt");
+
+    for(int i=0; i <= M; ++i)
+    {
+        for(int j=0; j <= N; ++j)
+        {
+            out_apporx << w[i][j] << " ";
+            out_ground << F(i,j) << " ";
+        }
+        out_apporx << std::endl;
+        out_ground << std::endl;
+    }
 
     return 0;
 }
