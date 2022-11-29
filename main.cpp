@@ -24,7 +24,7 @@ double *y;
 size_t M;
 size_t N;
 
-double **corr; // right side B
+// double **corr; // right side B
 
 double xy_sq(size_t i, size_t j) { return (x[i]+y[j])*(x[i]+y[j]); }
 
@@ -32,25 +32,35 @@ double u(size_t i, size_t j) { return exp(1.0 - xy_sq(i,j)); }
 
 double u_1(size_t i, size_t j) { return -2 * (x[i]+y[j]) * u(i,j); }
 
+double k(size_t i, size_t j) { return 4 + x[i]; }
+
 double u_lap(size_t i, size_t j)
 {
-    return  u(i,j) * (8 * (x[i]+4) * xy_sq(i,j) -
-            2 * (x[i]+y[j]) - 4 * (x[i] + 4));
-}
+    return  8 * k(i,j) * u(i, j) * xy_sq(i,j) - 
+            2 * u(i,j) * (x[i] + y[j]) -
+            4 * k(i,j) * u(i, j);
 
-double k(size_t i, size_t j) { return 4 + x[i]; }
+    // return  u(i,j) * (8 * (x[i] + 4) * xy_sq(i,j) -
+    //         2 * (x[i] + y[j]) - 4 * (x[i] + 4));
+}
 
 double q(size_t i, size_t j) { return xy_sq(i,j); }
 
 double phi(size_t i, size_t j) { return u(i,j); }
 
-double psi(size_t i, size_t j) { return k(i,j) * u_1(i,j); }
+double psi(size_t i, size_t j) 
+{
+    double mul = i ? 1 : -1; 
+    return mul * k(i,j) * u_1(i,j); 
+}
 
 double F(size_t i, size_t j) { return -u_lap(i, j) + q(i, j)*u(i, j); }
 
-double a(size_t i, size_t j) { return k(i - 0.5 * h1, j); }
+// k(x_i - 0.5 * h1, y_j)
+double a(size_t i, size_t j) { return 4 + x[i] - 0.5 * h1; }
 
-double b(size_t i, size_t j) { return k(i, j - 0.5 * h2); }
+// k(x_i, y_j - 0.5 * h2)
+double b(size_t i, size_t j) { return 4 + x[i]; }
 
 double w_x(double** w, size_t i, size_t j)
 {
@@ -293,6 +303,79 @@ double max_norm(double **w)
     return norm;
 }
 
+bool test()
+{
+    double **t = new double* [M+1];
+    for(int i=0; i <= M; ++i)
+        t[i] = new double [N+1];
+
+    for(int i=0; i <= M; ++i)
+        for(int j=0; j <= N; ++j)
+            t[i][j] = u(i,j);
+
+    // std::cout << "here" << std::endl;
+    double **t1 = new double* [M+1];
+    for(int i=0; i <= M; ++i)
+        t1[i] = new double [N+1];
+
+    for(int i=0; i <= M; ++i)
+        for(int j=0; j <= N; ++j)
+            t1[i][j] =  8 * k(i, j) * u(i, j) * xy_sq(i, j) -
+                        2 * u(i, j) * (x[i] + y[j]) -
+                        4 * k(i, j) * u(i, j);
+
+    double **t2 = new double* [M+1];
+    for(int i =0; i <= M; ++i)
+        t2[i] = new double [N+1];
+
+    for(int i=0; i <= M; ++i)
+        for(int j=0; j <= N; ++j)
+            t2[i][j] = t1[i][j];
+
+    for(int i=1; i < M; ++i)
+        for(int j=1; j < N; ++j)
+            t2[i][j] = lap_op(t,i,j);
+
+    // matrx_sub(t2, t1, t);
+    // std::cout << max_norm(t) << std::endl;
+
+    for(int i=0; i <= M; ++i){
+        for(int j=0; j <= N; ++j)
+            std::cout << t2[i][j] - t1[i][j] << " ";
+        std::cout << std::endl;
+    }
+
+
+    return true;
+}
+
+bool test1()
+{
+    double **B = new double *[M+1];
+    double **w = new double *[M+1];
+    double **r = new double *[M+1];
+    
+    for(int i=0; i <= M; ++i){
+        B[i] = new double [N+1];
+        w[i] = new double [N+1];
+        r[i] = new double [N+1];
+        for(int j=0; j <= N; ++j){
+            // B[i][j] = 8 * u(i, j) * xy_sq(i,j) - 4 * u(i,j);
+            B[i][j] = F(i, j);
+            w[i][j] = u(i, j);
+            r[i][j] = B[i][j];
+        }
+    }
+    
+    for(int i=1; i <= M-1; ++i)
+        for(int j=1; j <= N-1; ++j)
+            r[i][j] = main_eq(w, i, j);
+
+    matrx_sub(B, r, w);
+    std::cout << max_norm(w) << std::endl;
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     auto start = std::chrono::steady_clock::now();
@@ -304,6 +387,7 @@ int main(int argc, char **argv)
     h1 = (A_2 - A_1) / M;
     h2 = (B_2 - B_1) / N;
 
+
     x = new double [M+1];
     for(int i=0; i <= M; ++i)
         x[i] = A_1 + i * h1;
@@ -311,6 +395,7 @@ int main(int argc, char **argv)
     y = new double [N+1];
     for(int i=0; i <= N; ++i)
         y[i] = B_1 + i * h2;
+    
 
     // B side arr
     double **corr = new double *[M+1];
