@@ -24,8 +24,6 @@ double *y;
 size_t M;
 size_t N;
 
-// double **corr; // right side B
-
 double xy_sq(size_t i, size_t j) { return (x[i]+y[j])*(x[i]+y[j]); }
 
 double u(size_t i, size_t j) { return exp(1.0 - xy_sq(i,j)); }
@@ -39,20 +37,14 @@ double u_lap(size_t i, size_t j)
     return  8 * k(i,j) * u(i, j) * xy_sq(i,j) - 
             2 * u(i,j) * (x[i] + y[j]) -
             4 * k(i,j) * u(i, j);
-
-    // return  u(i,j) * (8 * (x[i] + 4) * xy_sq(i,j) -
-    //         2 * (x[i] + y[j]) - 4 * (x[i] + 4));
 }
 
 double q(size_t i, size_t j) { return xy_sq(i,j); }
 
 double phi(size_t i, size_t j) { return u(i,j); }
 
-double psi(size_t i, size_t j) 
-{
-    double mul = i ? 1 : -1; 
-    return mul * k(i,j) * u_1(i,j); 
-}
+double psi(size_t i, size_t j) { return (i ? 1 : -1) * k(i,j) * u_1(i,j); }
+// double psi(size_t i, size_t j) { return k(i,j) * u_1(i,j); }
 
 double F(size_t i, size_t j) { return -u_lap(i, j) + q(i, j)*u(i, j); }
 
@@ -192,54 +184,51 @@ void fill_ax(double *x, double *y)
         y[i] = B_1 + i * h2;
 }
 
-void fill_corr(double **corr)
+void fill_B(double **B)
 {
     // B side array
     ////////////////////////////////////////////////////////////
-    // corr = new double *[M+1];
+    // B = new double *[M+1];
     for(int i=0; i <= M; ++i)
-        corr[i] = new double [N+1];
+        B[i] = new double [N+1];
 
-
-    //filling b
     // top + bottom
     for(int i=0; i <= M; ++i)
     {
         // bottom
-        corr[i][0] = phi(i, 0);
+        B[i][0] = phi(i, 0);
         // bottom + 1
-        corr[i][1] = F(i, 1) + b(i, 1) * phi(i, 0) / (h2*h2);
+        B[i][1] = F(i, 1) + b(i, 1) * phi(i, 0) / (h2*h2);
         // top
-        corr[i][N] = F(i, N) + 2 * psi(i, N) / h2;
+        B[i][N] = F(i, N) + 2 * psi(i, N) / h2;
     }
-
-
-    // bot_1_left
-    corr[0][1] =    F(0, 1) + 2 * psi(0, 1) / h1 +
-                    b(0, 1) * phi(0, 0) / (h2*h2);
-    
-    // bot_1_right
-    corr[M][1] =    F(M, 1) + 2 * psi(M, 1) / h1 +
-                    b(M, 1) * phi(M, 0) / (h2*h2);
-
-    // top_left
-    corr[0][N] = F(0, N) + (2/h1 + 2/h2) * psi(0, N);
-    // top_right
-    corr[M][N] = F(M, N) + (2/h1 + 2/h2) * psi(M, N);
 
     // sides
     for(int j=1; j <= (N-1); ++j)
     {
         //left
-        corr[0][j] = F(0, j) + 2 * psi(0, j) / h1;
-        //rifht
-        corr[M][j] = F(M, j) + 2 * psi(M, j) / h1;
+        B[0][j] = F(0, j) + 2 * psi(0, j) / h1;
+        //right
+        B[M][j] = F(M, j) + 2 * psi(M, j) / h1;
     }
 
     // inner
     for(int i=1; i <= (M-1); ++i)
         for(int j=2; j <= (N-1); ++j)
-            corr[i][j] = F(i, j);
+            B[i][j] = F(i, j);
+
+    // bot_1_left
+    B[0][1] =    F(0, 1) + 2 * psi(0, 1) / h1 +
+                    b(0, 1) * phi(0, 0) / (h2*h2);
+    
+    // bot_1_right
+    B[M][1] =    F(M, 1) + 2 * psi(M, 1) / h1 +
+                    b(M, 1) * phi(M, 0) / (h2*h2);
+
+    // top_left
+    B[0][N] = F(0, N) + (2/h1 + 2/h2) * psi(0, N);
+    // top_right
+    B[M][N] = F(M, N) + (2/h1 + 2/h2) * psi(M, N);
 }
 
 void init_ndim_array(double **w)
@@ -398,52 +387,31 @@ int main(int argc, char **argv)
     
 
     // B side arr
-    double **corr = new double *[M+1];
-    fill_corr(corr);
+    double **B = new double *[M+1];
+    fill_B(B);
     
+    // w^k
     double **w = new double *[M+1];
     init_ndim_array(w);
 
     double **Aw = new double *[M+1];
     init_ndim_array(Aw);
 
-    double **Ar = new double *[M+1];
-    init_ndim_array(Ar);
-
+    // w^{k+1}
     double **w_1 = new double *[M+1];
     init_ndim_array(w_1);
-
-    double **tmp = new double *[M+1];
-    init_ndim_array(tmp);
 
     double **r = new double *[M+1];
     init_ndim_array(r);
 
-    /// testing /////////////////////////
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            w[i][j] = u(i,j);
-
-
-    apply_A(w, Aw);
-    matrx_sub(Aw, corr, r);
-
-    double t_max = std::abs(r[1][1]);
-    for(int i=1; i <= (M-1); ++i)
-        for(int j=1; j <= (N-1); ++j)
-            t_max = std::max(t_max, std::abs(r[i][j]));
-
-
-    std::cout << "Max error : " << t_max << std::endl;
-    return 0;
-    /// testing /////////////////////////
-
+    double **Ar = new double *[M+1];
+    init_ndim_array(Ar);
 
     // main loop
-    for(size_t it=0; it < 50000; ++it)
+    for(size_t it=0; it < 100000; ++it)
     {
-        apply_A(w, Aw); // 
-        matrx_sub(Aw, corr, r);
+        apply_A(w, Aw);
+        matrx_sub(Aw, B, r);
 
         apply_A(r, Ar);
         double tau = dot_prod(Ar, r) / dot_prod(Ar, Ar);
@@ -452,29 +420,56 @@ int main(int argc, char **argv)
             for(int j=0; j <= N; ++j)
                 w_1[i][j] = w[i][j] - tau * r[i][j];
 
-        matrx_sub(w_1, w, tmp);
-        double err = sqrt(dot_prod(tmp, tmp));
-        // double err = max_norm(tmp);
+        std::swap(w, w_1);
+
+        matrx_sub(w, w_1, w_1);
+        // double err = max_norm(w_1);
+        double err = sqrt(dot_prod(w_1, w_1));
         if(it % 1000 == 0)
             std::cout << "Iter " << it << " : " << err << std::endl;
-        std::swap(w, w_1);
         if (err < eps) break;
     }
-
 
     auto end = std::chrono::steady_clock::now();
     std::cout << "Time taken (ms) : ";
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() << std::endl;
+    
+    
+    // for(int i=0; i <= M; ++i)
+    //     for(int j=0; j <= N; ++j)
+    //         w_1[i][j] = 0;
 
-    std::ofstream out_apporx("garbage/out_approx.txt");
-    std::ofstream out_ground("garbage/out_ground.txt");
+
+    for(int i=0; i <= M-0; ++i)
+        for(int j=0; j <= N-0; ++j)
+            w_1[i][j] = w[i][j] - u(i,j);
+
+
+    double norm = std::abs(w_1[0][0]);
+    int max_i = 0,  max_j = 0;
+    for(int i=0; i <= M; ++i)
+        for(int j=0; j <= N; ++j)
+            if (norm < std::abs(w_1[i][j])){
+                max_i = i;
+                max_j = j;
+                norm = std::abs(w_1[i][j]);
+            }
+
+    std::cout << "Final error : " << norm << std::endl;
+    std::cout << "i = " << max_i << "; j = " << max_j << std::endl;
+
+    // std::cout << "Final error : " <<  max_norm(w_1) << std::endl;
+    
+
+    std::ofstream out_apporx("trash/out_approx.txt");
+    std::ofstream out_ground("trash/out_ground.txt");
 
     for(int i=0; i <= M; ++i)
     {
-        for(int j=0; j <= N; ++j)
+        for(int j = N; j >= 0; --j)
         {
             out_apporx << w[i][j] << " ";
-            out_ground << F(i,j) << " ";
+            out_ground << u(i, j) << " ";
         }
         out_apporx << std::endl;
         out_ground << std::endl;
