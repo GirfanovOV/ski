@@ -130,7 +130,10 @@ double top_l_point_eq(double **w)
 {
     return  -2 * a(1,N) * w_x_b(w,1,N) / h1 +
              2 * b(0,N) * w_y_b(w,0,N) / h2 +
-            (q(0,N) + 2 * alpha_l / h1) * w[0][N];
+            q(0,N) * w[0][N];
+    // return  -2 * a(1,N) * w_x_b(w,1,N) / h1 +
+    //          2 * b(0,N) * w_y_b(w,0,N) / h2 +
+    //         (q(0,N) + 2 * alpha_l / h1) * w[0][N];
 }
 
 // i == M & j==1
@@ -394,6 +397,7 @@ int main(int argc, char **argv)
     double **w = new double *[M+1];
     init_ndim_array(w);
 
+    // A x (w^k)
     double **Aw = new double *[M+1];
     init_ndim_array(Aw);
 
@@ -423,8 +427,8 @@ int main(int argc, char **argv)
         std::swap(w, w_1);
 
         matrx_sub(w, w_1, w_1);
-        // double err = max_norm(w_1);
-        double err = sqrt(dot_prod(w_1, w_1));
+        double err = max_norm(w_1);
+        // double err = sqrt(dot_prod(w_1, w_1));
         if(it % 1000 == 0)
             std::cout << "Iter " << it << " : " << err << std::endl;
         if (err < eps) break;
@@ -434,16 +438,14 @@ int main(int argc, char **argv)
     std::cout << "Time taken (ms) : ";
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() << std::endl;
     
-    
-    // for(int i=0; i <= M; ++i)
-    //     for(int j=0; j <= N; ++j)
-    //         w_1[i][j] = 0;
+    // bottom
+    for(int i=0; i <= M; ++i)
+        w[i][0] = phi(i, 0);
 
 
     for(int i=0; i <= M-0; ++i)
         for(int j=0; j <= N-0; ++j)
             w_1[i][j] = w[i][j] - u(i,j);
-
 
     double norm = std::abs(w_1[0][0]);
     int max_i = 0,  max_j = 0;
@@ -459,7 +461,6 @@ int main(int argc, char **argv)
     std::cout << "i = " << max_i << "; j = " << max_j << std::endl;
 
     // std::cout << "Final error : " <<  max_norm(w_1) << std::endl;
-    
 
     std::ofstream out_apporx("trash/out_approx.txt");
     std::ofstream out_ground("trash/out_ground.txt");
