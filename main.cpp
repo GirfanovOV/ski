@@ -10,8 +10,13 @@
 #define B_1 (double)-2
 #define B_2 (double) 2
 
-#define alpha_r 1.0
-#define alpha_l 1.0
+// #define alpha_r 1.0
+// #define alpha_l 1.0
+// #define alpha_t 1.0
+
+#define alpha_r 0.0
+#define alpha_l 0.0
+#define alpha_t 0.0
 
 #define eps (double)1e-6
 
@@ -117,12 +122,20 @@ double top_bound_eq(double **w, size_t i)
             q(i,N) * w[i][N] - w_axb_x(w, i, N);
 }
 
+double bot_1_bound_eq(double **w, size_t i)
+{
+    return  -w_axb_x(w,i,1) -
+            (b(i,2) * w_y_b(w,i,2) - b(i,1) * w[i][1] / h2) / h2 +
+            q(i,1) * w[i][1];
+}
+
 // i == M & j == N
 double top_r_point_eq(double **w)
 {
     return  2 * a(M,N) * w_x_b(w,M,N) / h1 +
             2 * b(M,N) * w_y_b(w,M,N) / h2 +
-            (q(M,N) + 2 * alpha_r / h1) * w[M][N];
+            q(M,N) * w[M][N];
+            // (q(M,N) + 2 * alpha_r / h1 ) * w[M][N];
 }
 
 // i == 0 & j == N
@@ -131,9 +144,8 @@ double top_l_point_eq(double **w)
     return  -2 * a(1,N) * w_x_b(w,1,N) / h1 +
              2 * b(0,N) * w_y_b(w,0,N) / h2 +
             q(0,N) * w[0][N];
-    // return  -2 * a(1,N) * w_x_b(w,1,N) / h1 +
-    //          2 * b(0,N) * w_y_b(w,0,N) / h2 +
-    //         (q(0,N) + 2 * alpha_l / h1) * w[0][N];
+            // (q(0,N) + 2 * alpha_l / h1) * w[0][N];
+            // (q(0,N) + 2 * alpha_t / h2) * w[0][N];
 }
 
 // i == M & j==1
@@ -159,7 +171,8 @@ double dot_prod(double **u1, double **u2)
     double res = 0;
     for(size_t i = 0; i <= M; ++i)
     {
-        double col_sum = u1[i][0] * u2[i][0] * 0.5;
+        // double col_sum = u1[i][0] * u2[i][0] * 0.5;
+        double col_sum = 0;
         for(size_t j = 1; j < N; ++j)
             col_sum += u1[i][j] * u2[i][j];
         col_sum += u1[i][N] * u2[i][N] * 0.5;
@@ -190,48 +203,46 @@ void fill_ax(double *x, double *y)
 void fill_B(double **B)
 {
     // B side array
-    ////////////////////////////////////////////////////////////
-    // B = new double *[M+1];
+    // init
     for(int i=0; i <= M; ++i)
         B[i] = new double [N+1];
-
-    // top + bottom
-    for(int i=0; i <= M; ++i)
-    {
-        // bottom
-        B[i][0] = phi(i, 0);
-        // bottom + 1
-        B[i][1] = F(i, 1) + b(i, 1) * phi(i, 0) / (h2*h2);
-        // top
-        B[i][N] = F(i, N) + 2 * psi(i, N) / h2;
-    }
-
-    // sides
-    for(int j=1; j <= (N-1); ++j)
-    {
-        //left
-        B[0][j] = F(0, j) + 2 * psi(0, j) / h1;
-        //right
-        B[M][j] = F(M, j) + 2 * psi(M, j) / h1;
-    }
+    ///////////////////////////
 
     // inner
     for(int i=1; i <= (M-1); ++i)
         for(int j=2; j <= (N-1); ++j)
             B[i][j] = F(i, j);
 
-    // bot_1_left
-    B[0][1] =    F(0, 1) + 2 * psi(0, 1) / h1 +
-                    b(0, 1) * phi(0, 0) / (h2*h2);
-    
+    // bot + 1
+    for(int i=1; i <= M-1; ++i)
+        B[i][1] = F(i, 1) + b(i, 1) * phi(i, 0) / (h2*h2);
+
+    // sides
+    for(int j=2; j <= (N-1); ++j)
+    {
+        //right
+        B[M][j] = F(M, j) + 2 * psi(M, j) / h1;
+        //left
+        B[0][j] = F(0, j) + 2 * psi(0, j) / h1;
+    }
+    //top
+    for(int i=1; i <= M-1; ++i)
+        B[i][N] = F(i, N) + 2 * psi(i, N) / h2;
+
+    // top_right
+    B[M][N] = F(M, N) + (2/h1 + 2/h2) * psi(M, N);
+    // top_left
+    B[0][N] = F(0, N) + (2/h1 + 2/h2) * psi(0, N);
     // bot_1_right
     B[M][1] =    F(M, 1) + 2 * psi(M, 1) / h1 +
                     b(M, 1) * phi(M, 0) / (h2*h2);
+    // bot_1_left
+    B[0][1] =    F(0, 1) + 2 * psi(0, 1) / h1 +
+                    b(0, 1) * phi(0, 0) / (h2*h2);
 
-    // top_left
-    B[0][N] = F(0, N) + (2/h1 + 2/h2) * psi(0, N);
-    // top_right
-    B[M][N] = F(M, N) + (2/h1 + 2/h2) * psi(M, N);
+    // bottom
+    for(int i=0; i <= M; ++i)
+        B[i][0] = phi(i, 0);
 }
 
 void init_ndim_array(double **w)
@@ -253,36 +264,39 @@ void cpy_arr(double **dest, double **src)
 
 void apply_A(double **w, double **w1)
 {
-    // bottom
-    for(int i=0; i <= M; ++i)
-        w1[i][0] = phi(i, 0);
-    
-    // bot_left+1
-    w1[0][1] = bot1_l_point_eq(w);
-    //bot_right+1
-    w1[M][1] = bot1_r_point_eq(w);
-    // top_left
-    w1[0][N] = top_l_point_eq(w);
-    // top_right
-    w1[M][N] = top_r_point_eq(w);
+    // inner points
+    for(int i=1; i <= (M-1); ++i)
+        for(int j=2; j <= (N-1); ++j)
+            w1[i][j] = main_eq(w, i, j);
 
+    // bot+1
+    for(int i=1; i <= (M-1); ++i)
+        w1[i][1] = bot_1_bound_eq(w,i);
+
+    // right+left bounds
+    for(int j=2; j <= (N-1); ++j)
+    {
+        //right
+        w1[M][j] = right_bound_eq(w, j);
+        //left
+        w1[0][j] = left_bound_eq(w, j);
+    }
     // top
     for(int i=1; i <= (M-1); ++i)
         w1[i][N] = top_bound_eq(w, i);
-
-    // left+right bounds
-    for(int j=2; j <= (N-1); ++j)
-    {
-        //left
-        w1[0][j] = left_bound_eq(w, j);
-        //right
-        w1[M][j] = right_bound_eq(w, j);
-    }
-
-    // inner points
-    for(int i=1; i <= (M-1); ++i)
-        for(int j=1; j <= (N-1); ++j)
-            w1[i][j] = main_eq(w, i, j);
+    
+    // top_right
+    w1[M][N] = top_r_point_eq(w);
+    // top_left
+    w1[0][N] = top_l_point_eq(w);
+    // bot_right+1
+    w1[M][1] = bot1_r_point_eq(w);
+    // bot_left+1
+    w1[0][1] = bot1_l_point_eq(w);
+    
+    // bottom
+    for(int i=0; i <= M; ++i)
+        w1[i][0] = phi(i, 0);
 }
 
 double max_norm(double **w)
@@ -411,6 +425,55 @@ int main(int argc, char **argv)
     double **Ar = new double *[M+1];
     init_ndim_array(Ar);
 
+
+// TESTING 
+///////////////////////////////////////////////////////
+    for(int i=0; i <= M; ++i)
+        for(int j=0; j <= N; ++j)
+            w[i][j] = u(i,j);
+
+    apply_A(w, Aw);
+    // Aw[0][N] = B[0][N];
+    // Aw[M][1] = B[M][1];
+
+    for(int i=0; i <= M-0; ++i)
+        for(int j=0; j <= N-0; ++j)
+            w_1[i][j] = Aw[i][j] - B[i][j];
+
+
+    double norm1 = std::abs(w_1[0][0]);
+    int max_i1 = 0,  max_j1 = 0;
+    for(int i=0; i <= M; ++i)
+        for(int j=0; j <= N; ++j)
+            if (norm1 < std::abs(w_1[i][j])){
+                max_i1 = i;
+                max_j1 = j;
+                norm1 = std::abs(w_1[i][j]);
+            }
+
+    std::cout << "Final error : " << norm1 << std::endl;
+    std::cout << "i = " << max_i1 << "; j = " << max_j1 << std::endl;
+
+    // std::cout << "Final error : " <<  max_norm(w_1) << std::endl;
+
+    std::ofstream out_apporx1("trash/out_approx.txt");
+    std::ofstream out_ground1("trash/out_ground.txt");
+
+    for(int i=0; i <= M; ++i)
+    {
+        for(int j = N; j >= 0; --j)
+        {
+            out_apporx1 << w_1[i][j] << " ";
+            // out_apporx1 << w[i][j] << " ";
+            out_ground1 << u(i, j) << " ";
+        }
+        out_apporx1 << std::endl;
+        out_ground1 << std::endl;
+    }
+
+    return 0;
+
+///////////////////////////////////////////////////////
     // main loop
     for(size_t it=0; it < 100000; ++it)
     {
@@ -421,7 +484,7 @@ int main(int argc, char **argv)
         double tau = dot_prod(Ar, r) / dot_prod(Ar, Ar);
         
         for(int i=0; i <= M; ++i)
-            for(int j=0; j <= N; ++j)
+            for(int j=1; j <= N; ++j)
                 w_1[i][j] = w[i][j] - tau * r[i][j];
 
         std::swap(w, w_1);
@@ -429,7 +492,7 @@ int main(int argc, char **argv)
         matrx_sub(w, w_1, w_1);
         double err = max_norm(w_1);
         // double err = sqrt(dot_prod(w_1, w_1));
-        if(it % 1000 == 0)
+        if(it % 5000 == 0)
             std::cout << "Iter " << it << " : " << err << std::endl;
         if (err < eps) break;
     }
