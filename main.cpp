@@ -1,18 +1,18 @@
-#include <cmath>
+#include <vector>
+#include <fstream>
 #include <iostream>
 #include <cstdlib>
-#include <fstream>
+#include <algorithm>
+#include <cmath>
+#include <mpi.h>
 #include <chrono>
-// #include <mpi.h>
+
+using namespace std;
 
 #define A_1 (double)-1
 #define A_2 (double) 2
 #define B_1 (double)-2
 #define B_2 (double) 2
-
-// #define alpha_r 1.0
-// #define alpha_l 1.0
-// #define alpha_t 1.0
 
 #define alpha_r 0.0
 #define alpha_l 0.0
@@ -20,15 +20,35 @@
 
 #define eps (double)1e-6
 
+#define STATUS_CONTINUE (int)11
+#define STATUS_END (int)22
+
+#define TAG_STATUS (int)12345
+#define TAG_SYNC (int)123456
+#define TAG_TAU (int)1234567
+
+
 double h1;
 double h2;
 
-double *x;
-double *y;
+long M;
+long N;
 
-size_t M;
-size_t N;
+vector<double> x;
+vector<double> y;
 
+// k(x_i - 0.5 * h1, y_j)
+double a(long i, long j) { return 4 + x[i] - 0.5 * h1; }
+// k(x_i, y_j - 0.5 * h2)
+double b(long i, long j) { return 4 + x[i]; }
+
+class grid;
+
+double w_axb_x(grid &f, long i, long j);
+
+double w_byb_y(grid &f, size_t i, size_t j);
+
+// (x+y)^2
 double xy_sq(size_t i, size_t j) { return (x[i]+y[j])*(x[i]+y[j]); }
 
 double u(size_t i, size_t j) { return exp(1.0 - xy_sq(i,j)); }
@@ -49,337 +69,338 @@ double q(size_t i, size_t j) { return xy_sq(i,j); }
 double phi(size_t i, size_t j) { return u(i,j); }
 
 double psi(size_t i, size_t j) { return (i ? 1 : -1) * k(i,j) * u_1(i,j); }
-// double psi(size_t i, size_t j) { return k(i,j) * u_1(i,j); }
 
-double F(size_t i, size_t j) { return -u_lap(i, j) + q(i, j)*u(i, j); }
+double F(size_t i, size_t j) { return -u_lap(i, j) + q(i, j) * u(i, j); }
 
-// k(x_i - 0.5 * h1, y_j)
-double a(size_t i, size_t j) { return 4 + x[i] - 0.5 * h1; }
 
-// k(x_i, y_j - 0.5 * h2)
-double b(size_t i, size_t j) { return 4 + x[i]; }
-
-double w_x(double** w, size_t i, size_t j)
+class grid
 {
-    return (w[i+1][j] - w[i][j]) / h1;
-}
+private:
+    vector<vector<double> > data;
+public:
+    long x_start;
+    long x_end;
+    long y_start;
+    long y_end;
+    grid(long x_start, long x_end, long y_start, long y_end) :
+        x_start(x_start), x_end(x_end), y_start(y_start), y_end(y_end)
+    {
+        data = vector<vector<double> >(x_end - x_start + 1);
+        for(vector<double> &vec : data)
+            vec = vector<double> (y_end - y_start + 1);
 
-double w_y(double** w, size_t i, size_t j)
-{
-    return (w[i][j+1] - w[i][j]) / h2;
-}
+    }
+    double& operator() (long i, long j) { return data[i-x_start][j-y_start]; }
+    
+    double lap_op(long i, long j) { return w_axb_x(*this, i, j) + w_byb_y(*this, i, j); }
+    void lap_op(grid &dest)
+    {
+        for(long i=x_start+1; i <= x_end-1; ++i)
+            for(long j=y_start+1; j <= y_end-1; ++j)
+                dest(i,j) = lap_op(i,j);
+    }
 
-double w_x_b(double** w, size_t i, size_t j)
-{
-    return (w[i][j] - w[i-1][j]) / h1;
-}
+    double main_eq(long i, long j) { return -lap_op(i, j) + q(i,j) * (*this)(i,j); }
+    void main_eq(grid &dest)
+    {
+        for(long i=x_start+1; i <= x_end-1; ++i)
+            for(long j=y_start+1; j <= y_end-1; ++j)
+                dest(i,j) = main_eq(i,j);
+    }
 
-double w_y_b(double** w, size_t i, size_t j)
-{
-    return (w[i][j] - w[i][j-1]) / h2;
-}
+    double dot_prod(grid &other)
+    {
+        double res = 0;
+        for(size_t i = x_start + (x_start != 0); i <= x_end - (x_end != M); ++i)
+        {
+            double col_sum = 0;
+            for(size_t j = y_start + 1; j <= y_end-1; ++j)
+                col_sum += (*this)(i,j) * other(i,j);
+            col_sum += (*this)(i,y_end) * other(i,y_end) * (y_end == N ? 0.5 : 0.0);
 
-double w_axb_x(double** w, size_t i, size_t j)
-{
-    return (a(i+1,j) * w_x(w,i,j) - a(i,j) * w_x_b(w,i,j)) / h1;
-}
+            res += col_sum * ((!i || i == M) ? 0.5 : 1.0);
+        }
+        return res * h1 * h2;
+    }
 
-double w_byb_y(double **w, size_t i, size_t j)
-{
-    return (b(i,j+1) * w_y(w,i,j) - b(i,j) * w_y_b(w,i,j)) / h2;
-}
+    void sub(grid &other, grid &dest)
+    {
+        for(int i=x_start; i<=x_end; ++i)
+            for(int j=y_start; j<=y_end; ++j)
+                dest(i,j) = (*this)(i,j) - other(i,j);
+    }
 
-double lap_op(double** w, size_t i, size_t j)
-{
-    return w_axb_x(w, i, j) + w_byb_y(w, i, j);
-}
+    double max_norm()
+    {
+        double norm = abs((*this)(x_start+1, y_start+1));
+        for(size_t i = x_start + (x_start != 0); i <= x_end - (x_end != M); ++i)
+            for(size_t j = y_start + (y_start != 0); j <= y_end - (y_end != N); ++j)
+                norm = max(norm, abs((*this)(i,j)));
+        return norm;
+    }
 
-/////////////////////////////////////////////////
+    bool is_in(long i, long j)
+    { return (x_start <= i) && (i <= x_end) && (y_start <= j) && (j <= y_end); }
+    
+    void print_arr()
+    {
+        for(int i=x_start+(x_start != 0); i <= x_end-(x_end != M); ++i){
+            for(int j=y_start+(y_start != 0); j <= y_end-(y_end != N); ++j)
+                std::cout << (*this)(i,j) << " ";
+            std::cout << endl;
+        }
 
-double main_eq(double **w, size_t i, size_t j)
-{
-    return -lap_op(w, i, j) + q(i,j) * w[i][j];
-}
+    }
+    ~grid() {};
+};
+
+// Forward 1-st derivative on x
+double fwd_diff_x(grid &f, long i, long j)
+{ return (f(i+1,j) - f(i,j)) / h1; }
+
+// Backward 1-st derivative on x
+double bwd_diff_x(grid &f, long i, long j)
+{ return fwd_diff_x(f, i-1, j); }
+
+// Forward 1-st derivative on y
+double fwd_diff_y(grid &f, long i, long j)
+{ return (f(i,j+1) - f(i, j)) / h2; }
+
+// Backward 1-st derivative on y
+double bwd_diff_y(grid &f, long i, long j)
+{ return fwd_diff_y(f, i, j-1); }
+    
+double w_axb_x(grid &f, long i, long j)
+{ return (a(i+1,j) * fwd_diff_x(f,i,j) - a(i,j) * bwd_diff_x(f,i,j)) / h1; }
+
+double w_byb_y(grid &f, size_t i, size_t j)
+{ return (b(i,j+1) * fwd_diff_y(f,i,j) - b(i,j) * bwd_diff_y(f,i,j)) / h2; }
 
 // i == M
-double right_bound_eq(double **w, size_t j)
+double right_bound_eq(grid &f, size_t j)
 {
-    return  2 * a(M, j) * w_x_b(w,M,j) / h1 +
-            q(M,j) * w[M][j] - w_byb_y(w,M,j);
+    return  2 * a(M, j) * bwd_diff_x(f,M,j) / h1 +
+            q(M,j) * f(M,j) - w_byb_y(f,M,j);
 }
 
 // i == 0
-double left_bound_eq(double **w, size_t j)
+double left_bound_eq(grid &f, size_t j)
 {
-    return  -2 * a(1,j) * w_x_b(w,1,j) / h1 +
-            q(0,j) * w[0][j] - w_byb_y(w,0,j);
+    return  -2 * a(1,j) * bwd_diff_x(f,1,j) / h1 +
+            q(0,j) * f(0,j) - w_byb_y(f,0,j);
 }
 
 // j == N
-double top_bound_eq(double **w, size_t i)
+double top_bound_eq(grid &f, size_t i)
 {
-    return  2 * b(i,N) * w_y_b(w,i,N) / h2 +
-            q(i,N) * w[i][N] - w_axb_x(w, i, N);
+    return  2 * b(i,N) * bwd_diff_y(f,i,N) / h2 +
+            q(i,N) * f(i,N) - w_axb_x(f, i, N);
 }
 
-double bot_1_bound_eq(double **w, size_t i)
+double bot_1_bound_eq(grid &f, size_t i)
 {
-    return  -w_axb_x(w,i,1) -
-            (b(i,2) * w_y_b(w,i,2) - b(i,1) * w[i][1] / h2) / h2 +
-            q(i,1) * w[i][1];
+    return  -w_axb_x(f,i,1) -
+            (b(i,2) * bwd_diff_y(f,i,2) - b(i,1) * f(i,1) / h2) / h2 +
+            q(i,1) * f(i,1);
 }
 
 // i == M & j == N
-double top_r_point_eq(double **w)
+double top_r_point_eq(grid &f)
 {
-    return  2 * a(M,N) * w_x_b(w,M,N) / h1 +
-            2 * b(M,N) * w_y_b(w,M,N) / h2 +
-            q(M,N) * w[M][N];
-            // (q(M,N) + 2 * alpha_r / h1 ) * w[M][N];
+    return  2 * a(M,N) * bwd_diff_x(f,M,N) / h1 +
+            2 * b(M,N) * bwd_diff_y(f,M,N) / h2 +
+            q(M,N) * f(M,N);
 }
 
 // i == 0 & j == N
-double top_l_point_eq(double **w)
+double top_l_point_eq(grid &f)
 {
-    return  -2 * a(1,N) * w_x_b(w,1,N) / h1 +
-             2 * b(0,N) * w_y_b(w,0,N) / h2 +
-            q(0,N) * w[0][N];
-            // (q(0,N) + 2 * alpha_l / h1) * w[0][N];
-            // (q(0,N) + 2 * alpha_t / h2) * w[0][N];
+    return  -2 * a(1,N) * bwd_diff_x(f,1,N) / h1 +
+             2 * b(0,N) * bwd_diff_y(f,0,N) / h2 +
+            q(0,N) * f(0,N);
 }
 
 // i == M & j==1
-double bot1_r_point_eq(double **w)
+double bot1_r_point_eq(grid &f)
 {
-    return  2 * a(M,1) * w_x_b(w,M,1) / h1 +
-            (q(M,1) + 2 * alpha_r / h1) * w[M][1] -
-            (b(M,2) * w_y_b(w,M,2) - b(M,1) * w[M][1] / h2) / h2;
+    return  2 * a(M,1) * bwd_diff_x(f,M,1) / h1 +
+            (q(M,1) + 2 * alpha_r / h1) * f(M,1) -
+            (b(M,2) * bwd_diff_y(f,M,2) - b(M,1) * f(M,1) / h2) / h2;
 }
 
 // i == 0 & j==1
-double bot1_l_point_eq(double **w)
+double bot1_l_point_eq(grid &f)
 {
-    return  -2 * a(1,1) * w_x_b(w,1,1) / h1 +
-            (q(0,1) + 2 * alpha_l / h1) * w[0][1] -
-            (b(0,2) * w_y_b(w,0,2) - b(0,1) * w[0][1] / h2) / h2;
+    return  -2 * a(1,1) * bwd_diff_x(f,1,1) / h1 +
+            (q(0,1) + 2 * alpha_l / h1) * f(0,1) -
+            (b(0,2) * bwd_diff_y(f,0,2) - b(0,1) * f(0,1) / h2) / h2;
 }
 
-/////////////////////////////////////////////////
-
-double dot_prod(double **u1, double **u2)
-{
-    double res = 0;
-    for(size_t i = 0; i <= M; ++i)
-    {
-        // double col_sum = u1[i][0] * u2[i][0] * 0.5;
-        double col_sum = 0;
-        for(size_t j = 1; j < N; ++j)
-            col_sum += u1[i][j] * u2[i][j];
-        col_sum += u1[i][N] * u2[i][N] * 0.5;
-
-        res += col_sum * ((!i || i == M) ? 0.5 : 1.0);
-    }
-    return res * h1 * h2;
-}
-
-void matrx_sub(double **left, double **right, double **dest)
-{
-    for(int i=0; i<=M; ++i)
-        for(int j=0; j<=N; ++j)
-            dest[i][j] = left[i][j] - right[i][j];
-}
-
-void fill_ax(double *x, double *y)
-{
-    x = new double [M+1];
-    for(int i=0; i <= M; ++i)
-        x[i] = A_1 + i * h1;
-
-    y = new double [N+1];
-    for(int i=0; i <= N; ++i)
-        y[i] = B_1 + i * h2;
-}
-
-void fill_B(double **B)
+void fill_B(grid &w)
 {
     // B side array
-    // init
-    for(int i=0; i <= M; ++i)
-        B[i] = new double [N+1];
-    ///////////////////////////
 
+    
     // inner
-    for(int i=1; i <= (M-1); ++i)
-        for(int j=2; j <= (N-1); ++j)
-            B[i][j] = F(i, j);
+    for(int i=w.x_start+1; i <= w.x_end-1; ++i)
+        for(int j=w.y_start+1; j <= w.y_end-1; ++j)
+            w(i,j) = F(i, j);
 
     // bot + 1
-    for(int i=1; i <= M-1; ++i)
-        B[i][1] = F(i, 1) + b(i, 1) * phi(i, 0) / (h2*h2);
+    if(w.is_in(w.x_start, 1))
+        for(int i=w.x_start+1; i <= w.x_end-1; ++i)
+            w(i,1) = F(i, 1) + b(i, 1) * phi(i, 0) / (h2*h2);
 
-    // sides
-    for(int j=2; j <= (N-1); ++j)
-    {
-        //right
-        B[M][j] = F(M, j) + 2 * psi(M, j) / h1;
-        //left
-        B[0][j] = F(0, j) + 2 * psi(0, j) / h1;
-    }
+    // right side
+    if(w.is_in(M, w.y_start))
+        for(int j=w.y_start+1; j <= w.y_end-1; ++j)
+            w(M,j) = F(M, j) + 2 * psi(M, j) / h1;
+
+
+    // left side
+    if(w.is_in(0, w.y_start))
+        for(int j=w.y_start; j <= w.y_end; ++j)
+            w(0,j) = F(0, j) + 2 * psi(0, j) / h1;
+
     //top
-    for(int i=1; i <= M-1; ++i)
-        B[i][N] = F(i, N) + 2 * psi(i, N) / h2;
+    if(w.is_in(w.x_start, N))
+        for(int i=w.x_start; i <= w.x_end; ++i)
+            w(i,N) = F(i, N) + 2 * psi(i, N) / h2;
 
     // top_right
-    B[M][N] = F(M, N) + (2/h1 + 2/h2) * psi(M, N);
+    if(w.is_in(M,N))
+        w(M,N) = F(M, N) + (2/h1 + 2/h2) * psi(M, N);
     // top_left
-    B[0][N] = F(0, N) + (2/h1 + 2/h2) * psi(0, N);
+    if(w.is_in(0,N))
+        w(0,N) = F(0, N) + (2/h1 + 2/h2) * psi(0, N);
     // bot_1_right
-    B[M][1] =    F(M, 1) + 2 * psi(M, 1) / h1 +
-                    b(M, 1) * phi(M, 0) / (h2*h2);
+    if(w.is_in(M,1))
+        w(M,1) =   F(M, 1) + 2 * psi(M, 1) / h1 +
+                                    b(M, 1) * phi(M, 0) / (h2*h2);
     // bot_1_left
-    B[0][1] =    F(0, 1) + 2 * psi(0, 1) / h1 +
-                    b(0, 1) * phi(0, 0) / (h2*h2);
+    if(w.is_in(0,1))
+        w(0,1) =   F(0, 1) + 2 * psi(0, 1) / h1 +
+                                    b(0, 1) * phi(0, 0) / (h2*h2);
 
     // bottom
-    for(int i=0; i <= M; ++i)
-        B[i][0] = phi(i, 0);
+    if(w.is_in(w.x_start, 0))
+        for(int i=w.x_start; i <= w.x_end; ++i)
+            w(i,0) = phi(i, 0);
 }
 
-void init_ndim_array(double **w)
-{
-    for(int i=0; i <= M; ++i)
-        w[i] = new double [N+1];
-
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            w[i][j] = 0;
-}
-
-void cpy_arr(double **dest, double **src)
-{
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            dest[i][j] = src[i][j];
-}
-
-void apply_A(double **w, double **w1)
+void apply_A(grid &w, grid &w1)
 {
     // inner points
-    for(int i=1; i <= (M-1); ++i)
-        for(int j=2; j <= (N-1); ++j)
-            w1[i][j] = main_eq(w, i, j);
+    for(int i=w.x_start+1; i <= w.x_end-1 ; ++i)
+        for(int j=w.y_start+1; j <= w.y_end-1; ++j)
+            w1(i,j) = w.main_eq(i, j);
 
     // bot+1
-    for(int i=1; i <= (M-1); ++i)
-        w1[i][1] = bot_1_bound_eq(w,i);
+    if(w.is_in(w.x_start, 1))
+        for(int i=w.x_start+1; i <= w.x_end-1; ++i)
+            w1(i,1) = bot_1_bound_eq(w,i);
 
-    // right+left bounds
-    for(int j=2; j <= (N-1); ++j)
-    {
-        //right
-        w1[M][j] = right_bound_eq(w, j);
-        //left
-        w1[0][j] = left_bound_eq(w, j);
-    }
+    // right
+    if(w.is_in(M, w.y_start))
+        for(int j=w.y_start+1; j <= w.y_end-1; ++j)
+            w1(M, j) = right_bound_eq(w, j);
+    
+    // left
+    if(w.is_in(0, w.y_start))
+        for(int j=w.y_start+1; j <= w.y_end-1; ++j)
+            w1(0, j) = left_bound_eq(w, j);
+
     // top
-    for(int i=1; i <= (M-1); ++i)
-        w1[i][N] = top_bound_eq(w, i);
+    if(w.is_in(w.x_start, N))
+        for(int i=w.x_start+1; i <= (w.x_end-1); ++i)
+            w1(i,N) = top_bound_eq(w, i);
     
     // top_right
-    w1[M][N] = top_r_point_eq(w);
+    if(w.is_in(M,N))
+        w1(M,N) = top_r_point_eq(w);
     // top_left
-    w1[0][N] = top_l_point_eq(w);
+    if(w.is_in(0,N))
+        w1(0,N) = top_l_point_eq(w);
     // bot_right+1
-    w1[M][1] = bot1_r_point_eq(w);
+    if(w.is_in(M,1))
+        w1(M,1) = bot1_r_point_eq(w);
     // bot_left+1
-    w1[0][1] = bot1_l_point_eq(w);
+    if(w.is_in(0,1))
+        w1(0,1) = bot1_l_point_eq(w);
     
     // bottom
-    for(int i=0; i <= M; ++i)
-        w1[i][0] = phi(i, 0);
+    if(w.is_in(w.x_start, 0))
+        for(int i=w.x_start; i <= w.x_end; ++i)
+            w1(i,0) = phi(i, 0);
 }
 
-double max_norm(double **w)
+void send_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
 {
-    double norm = std::abs(w[0][0]);
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            norm = std::max(norm, std::abs(w[i][j]));
-
-    return norm;
-}
-
-bool test()
-{
-    double **t = new double* [M+1];
-    for(int i=0; i <= M; ++i)
-        t[i] = new double [N+1];
-
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            t[i][j] = u(i,j);
-
-    // std::cout << "here" << std::endl;
-    double **t1 = new double* [M+1];
-    for(int i=0; i <= M; ++i)
-        t1[i] = new double [N+1];
-
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            t1[i][j] =  8 * k(i, j) * u(i, j) * xy_sq(i, j) -
-                        2 * u(i, j) * (x[i] + y[j]) -
-                        4 * k(i, j) * u(i, j);
-
-    double **t2 = new double* [M+1];
-    for(int i =0; i <= M; ++i)
-        t2[i] = new double [N+1];
-
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            t2[i][j] = t1[i][j];
-
-    for(int i=1; i < M; ++i)
-        for(int j=1; j < N; ++j)
-            t2[i][j] = lap_op(t,i,j);
-
-    // matrx_sub(t2, t1, t);
-    // std::cout << max_norm(t) << std::endl;
-
-    for(int i=0; i <= M; ++i){
-        for(int j=0; j <= N; ++j)
-            std::cout << t2[i][j] - t1[i][j] << " ";
-        std::cout << std::endl;
-    }
-
-
-    return true;
-}
-
-bool test1()
-{
-    double **B = new double *[M+1];
-    double **w = new double *[M+1];
-    double **r = new double *[M+1];
-    
-    for(int i=0; i <= M; ++i){
-        B[i] = new double [N+1];
-        w[i] = new double [N+1];
-        r[i] = new double [N+1];
-        for(int j=0; j <= N; ++j){
-            // B[i][j] = 8 * u(i, j) * xy_sq(i,j) - 4 * u(i,j);
-            B[i][j] = F(i, j);
-            w[i][j] = u(i, j);
-            r[i][j] = B[i][j];
+        // sync
+        if(xx != 0) {
+            for(int k=w.y_start; k <= w.y_end; ++k)
+                tmp[k-w.y_start] = w(w.x_start+1, k);
+            int dest = (xx - 1) * nprocs_per_row + yy;
+            MPI_Send(tmp, w.y_end-w.y_start+1, MPI_DOUBLE, dest, TAG_SYNC, MPI_COMM_WORLD);
         }
-    }
-    
-    for(int i=1; i <= M-1; ++i)
-        for(int j=1; j <= N-1; ++j)
-            r[i][j] = main_eq(w, i, j);
 
-    matrx_sub(B, r, w);
-    std::cout << max_norm(w) << std::endl;
-    return 1;
+        // sync
+        if(xx != nprocs_per_row-1) {
+            for(int k=w.y_start; k <= w.y_end; ++k)
+                tmp[k-w.y_start] = w(w.x_end-1, k);
+            int dest = (xx + 1) * nprocs_per_row + yy;
+            MPI_Send(tmp, w.y_end-w.y_start+1, MPI_DOUBLE, dest, TAG_SYNC, MPI_COMM_WORLD);
+        }
+
+        // sync
+        if(yy != 0) {
+            for(int k=w.x_start; k <= w.x_end; ++k)
+                tmp[k-w.x_start] = w(k, w.y_start+1);
+            int dest = xx * nprocs_per_row + (yy - 1);
+            MPI_Send(tmp, w.x_end-w.x_start+1, MPI_DOUBLE, dest, TAG_SYNC, MPI_COMM_WORLD);
+        }
+
+        // sync
+        if(yy != nprocs_per_row-1) {
+            for(int k=w.x_start; k <= w.x_end; ++k)
+                tmp[k-w.x_start] = w(k, w.y_end-1);
+            int dest = xx * nprocs_per_row + (yy + 1);
+            MPI_Send(tmp, w.x_end-w.x_start+1, MPI_DOUBLE, dest, TAG_SYNC, MPI_COMM_WORLD);
+        }
+}
+
+void recv_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
+{
+    if(xx != nprocs_per_row-1) {
+        int src = (xx + 1) * nprocs_per_row + yy;
+        MPI_Recv(tmp, w.y_end-w.y_start+1, MPI_DOUBLE, src, TAG_SYNC, MPI_COMM_WORLD, NULL);
+        for(int k=w.y_start; k <= w.y_end; ++k)
+            w(w.x_end, k) = tmp[k-w.y_start];
+    }
+
+    // sync
+    if(xx != 0) {
+        int src = (xx - 1) * nprocs_per_row + yy;
+        MPI_Recv(tmp, w.y_end-w.y_start+1, MPI_DOUBLE, src, TAG_SYNC, MPI_COMM_WORLD, NULL);
+        for(int k=w.y_start; k <= w.y_end; ++k)
+            w(w.x_start, k) = tmp[k-w.y_start];
+    }
+
+    // sync
+    if(yy != nprocs_per_row-1) {
+        int src = xx * nprocs_per_row + (yy + 1);
+        MPI_Recv(tmp, w.x_end-w.x_start+1, MPI_DOUBLE, src, TAG_SYNC, MPI_COMM_WORLD, NULL);
+        for(int k=w.x_start; k <= w.x_end; ++k)
+            w(k, w.y_end) = tmp[k-w.x_start];
+    }
+
+    // sync
+    if(yy != 0) {
+        int src = xx * nprocs_per_row + (yy - 1);
+        MPI_Recv(tmp, w.x_end-w.x_start+1, MPI_DOUBLE, src, TAG_SYNC, MPI_COMM_WORLD, NULL);
+        for(int k=w.x_start; k <= w.x_end; ++k)
+            w(k, w.y_start) = tmp[k-w.x_start];
+    }
 }
 
 int main(int argc, char **argv)
@@ -393,151 +414,114 @@ int main(int argc, char **argv)
     h1 = (A_2 - A_1) / M;
     h2 = (B_2 - B_1) / N;
 
-
-    x = new double [M+1];
+    x.reserve(M+1);
     for(int i=0; i <= M; ++i)
         x[i] = A_1 + i * h1;
 
-    y = new double [N+1];
+    y.reserve(N+1);
     for(int i=0; i <= N; ++i)
         y[i] = B_1 + i * h2;
-    
 
-    // B side arr
-    double **B = new double *[M+1];
+    int nprocs;
+    int rank;
+
+    MPI_Init(&argc, &argv);
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+
+    int nprocs_per_row = (int)(sqrt(nprocs));
+
+    int x_per_proc = (int) (M / nprocs_per_row);
+    int y_per_proc = (int) (N / nprocs_per_row);
+
+    int xx = rank / nprocs_per_row;
+    int yy = rank % nprocs_per_row;
+
+    int x_start = xx * x_per_proc - (xx != 0);
+    int x_end = x_start + x_per_proc + (xx != 0);
+    int y_start = yy * y_per_proc - (yy != 0);
+    int y_end = y_start + y_per_proc + (yy != 0);
+    
+    grid B(x_start, x_end, y_start, y_end);
     fill_B(B);
+
+    grid w(x_start, x_end, y_start, y_end);
+    grid Aw(x_start, x_end, y_start, y_end);
+    grid w1(x_start, x_end, y_start, y_end);
+    grid r(x_start, x_end, y_start, y_end);
+    grid Ar(x_start, x_end, y_start, y_end);
+
+    int cnt = x_end-x_start+10;
+    double *tmp = new double [cnt];
+
+    int status = STATUS_CONTINUE;
     
-    // w^k
-    double **w = new double *[M+1];
-    init_ndim_array(w);
-
-    // A x (w^k)
-    double **Aw = new double *[M+1];
-    init_ndim_array(Aw);
-
-    // w^{k+1}
-    double **w_1 = new double *[M+1];
-    init_ndim_array(w_1);
-
-    double **r = new double *[M+1];
-    init_ndim_array(r);
-
-    double **Ar = new double *[M+1];
-    init_ndim_array(Ar);
+    int max_iter = 5000;
 
 
-// TESTING 
-///////////////////////////////////////////////////////
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            w[i][j] = u(i,j);
-
-    apply_A(w, Aw);
-    // Aw[0][N] = B[0][N];
-    // Aw[M][1] = B[M][1];
-
-    for(int i=0; i <= M-0; ++i)
-        for(int j=0; j <= N-0; ++j)
-            w_1[i][j] = Aw[i][j] - B[i][j];
-
-
-    double norm1 = std::abs(w_1[0][0]);
-    int max_i1 = 0,  max_j1 = 0;
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            if (norm1 < std::abs(w_1[i][j])){
-                max_i1 = i;
-                max_j1 = j;
-                norm1 = std::abs(w_1[i][j]);
-            }
-
-    std::cout << "Final error : " << norm1 << std::endl;
-    std::cout << "i = " << max_i1 << "; j = " << max_j1 << std::endl;
-
-    // std::cout << "Final error : " <<  max_norm(w_1) << std::endl;
-
-    std::ofstream out_apporx1("trash/out_approx.txt");
-    std::ofstream out_ground1("trash/out_ground.txt");
-
-    for(int i=0; i <= M; ++i)
-    {
-        for(int j = N; j >= 0; --j)
-        {
-            out_apporx1 << w_1[i][j] << " ";
-            // out_apporx1 << w[i][j] << " ";
-            out_ground1 << u(i, j) << " ";
-        }
-        out_apporx1 << std::endl;
-        out_ground1 << std::endl;
-    }
-
-    return 0;
-
-///////////////////////////////////////////////////////
-    // main loop
-    for(size_t it=0; it < 100000; ++it)
+    for(int it=0; (it <= max_iter) && (status == STATUS_CONTINUE); ++it)
     {
         apply_A(w, Aw);
-        matrx_sub(Aw, B, r);
+        Aw.sub(B, r);
 
+        send_sync(r, tmp, xx, yy, nprocs_per_row);
+        recv_sync(r, tmp, xx, yy, nprocs_per_row);
         apply_A(r, Ar);
-        double tau = dot_prod(Ar, r) / dot_prod(Ar, Ar);
         
-        for(int i=0; i <= M; ++i)
-            for(int j=1; j <= N; ++j)
-                w_1[i][j] = w[i][j] - tau * r[i][j];
 
-        std::swap(w, w_1);
+        double Ar_r_total;
+        double Ar_r_local = Ar.dot_prod(r);
+        double Ar_Ar_total;
+        double Ar_Ar_local = Ar.dot_prod(Ar);
 
-        matrx_sub(w, w_1, w_1);
-        double err = max_norm(w_1);
-        // double err = sqrt(dot_prod(w_1, w_1));
-        if(it % 5000 == 0)
-            std::cout << "Iter " << it << " : " << err << std::endl;
-        if (err < eps) break;
-    }
+        double tau;
 
-    auto end = std::chrono::steady_clock::now();
-    std::cout << "Time taken (ms) : ";
-    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() << std::endl;
-    
-    // bottom
-    for(int i=0; i <= M; ++i)
-        w[i][0] = phi(i, 0);
+        MPI_Reduce(&Ar_r_local, &Ar_r_total, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&Ar_Ar_local, &Ar_Ar_total, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
-
-    for(int i=0; i <= M-0; ++i)
-        for(int j=0; j <= N-0; ++j)
-            w_1[i][j] = w[i][j] - u(i,j);
-
-    double norm = std::abs(w_1[0][0]);
-    int max_i = 0,  max_j = 0;
-    for(int i=0; i <= M; ++i)
-        for(int j=0; j <= N; ++j)
-            if (norm < std::abs(w_1[i][j])){
-                max_i = i;
-                max_j = j;
-                norm = std::abs(w_1[i][j]);
-            }
-
-    std::cout << "Final error : " << norm << std::endl;
-    std::cout << "i = " << max_i << "; j = " << max_j << std::endl;
-
-    // std::cout << "Final error : " <<  max_norm(w_1) << std::endl;
-
-    std::ofstream out_apporx("trash/out_approx.txt");
-    std::ofstream out_ground("trash/out_ground.txt");
-
-    for(int i=0; i <= M; ++i)
-    {
-        for(int j = N; j >= 0; --j)
-        {
-            out_apporx << w[i][j] << " ";
-            out_ground << u(i, j) << " ";
+        if(!rank) {
+            tau = Ar_r_total / Ar_Ar_total;
+            for(int k=1; k < nprocs; ++k)
+                MPI_Send(&tau, 1, MPI_DOUBLE, k, TAG_TAU, MPI_COMM_WORLD);
         }
-        out_apporx << std::endl;
-        out_ground << std::endl;
-    }
+        else 
+            MPI_Recv(&tau, 1, MPI_DOUBLE, 0, TAG_TAU, MPI_COMM_WORLD, NULL);
 
+
+        for(int i=x_start; i <= x_end; ++i)
+            for(int j=y_start; j <= y_end; ++j)
+                w1(i,j) = w(i,j) - tau * r(i,j);        
+
+
+        swap(w, w1);
+        w.sub(w1, w1);
+
+        double err = w1.max_norm();
+        
+        double true_err;
+        MPI_Reduce(&err, &true_err, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+        
+        send_sync(w, tmp, xx, yy, nprocs_per_row);
+        recv_sync(r, tmp, xx, yy, nprocs_per_row);
+
+        if(rank == 0){
+            if(it % (max_iter / 10) == 0)
+                std::cout << "Iter " << it << " : " << true_err << std::endl;
+            if (true_err < eps)
+                status = STATUS_END;
+            for(int k=1; k < nprocs; ++k)
+                MPI_Send(&status, 1, MPI_INT, k, TAG_STATUS, MPI_COMM_WORLD);
+        }
+
+        if(rank != 0)
+            MPI_Recv(&status, 1, MPI_INT, 0, TAG_STATUS, MPI_COMM_WORLD, NULL);
+
+    }
+    if(!rank){ 
+        auto end = std::chrono::steady_clock::now();
+        std::cout << "Time taken (ms) : ";
+        std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() << std::endl;
+    }
+    MPI_Finalize();
     return 0;
 }
