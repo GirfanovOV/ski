@@ -6,6 +6,7 @@
 #include <cmath>
 #include <mpi.h>
 #include <chrono>
+#include <omp.h>
 
 using namespace std;
 
@@ -103,6 +104,8 @@ public:
     double main_eq(long i, long j) { return -lap_op(i, j) + q(i,j) * (*this)(i,j); }
     void main_eq(grid &dest)
     {
+
+        #pragma omp parallel for collapse(2)
         for(long i=x_start+1; i <= x_end-1; ++i)
             for(long j=y_start+1; j <= y_end-1; ++j)
                 dest(i,j) = main_eq(i,j);
@@ -125,6 +128,7 @@ public:
 
     void sub(grid &other, grid &dest)
     {
+        #pragma omp parallel for collapse(2)
         for(int i=x_start; i<=x_end; ++i)
             for(int j=y_start; j<=y_end; ++j)
                 dest(i,j) = (*this)(i,j) - other(i,j);
@@ -242,28 +246,33 @@ void fill_B(grid &w)
 
     
     // inner
+    #pragma omp parallel for collapse(2)
     for(int i=w.x_start+1; i <= w.x_end-1; ++i)
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w(i,j) = F(i, j);
 
     // bot + 1
     if(w.is_in(w.x_start, 1))
+        #pragma omp parallel for
         for(int i=w.x_start+1; i <= w.x_end-1; ++i)
             w(i,1) = F(i, 1) + b(i, 1) * phi(i, 0) / (h2*h2);
 
     // right side
     if(w.is_in(M, w.y_start))
+        #pragma omp parallel for
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w(M,j) = F(M, j) + 2 * psi(M, j) / h1;
 
 
     // left side
     if(w.is_in(0, w.y_start))
+        #pragma omp parallel for
         for(int j=w.y_start; j <= w.y_end; ++j)
             w(0,j) = F(0, j) + 2 * psi(0, j) / h1;
 
     //top
     if(w.is_in(w.x_start, N))
+        #pragma omp parallel for
         for(int i=w.x_start; i <= w.x_end; ++i)
             w(i,N) = F(i, N) + 2 * psi(i, N) / h2;
 
@@ -284,6 +293,7 @@ void fill_B(grid &w)
 
     // bottom
     if(w.is_in(w.x_start, 0))
+        #pragma omp parallel for
         for(int i=w.x_start; i <= w.x_end; ++i)
             w(i,0) = phi(i, 0);
 }
@@ -291,27 +301,32 @@ void fill_B(grid &w)
 void apply_A(grid &w, grid &w1)
 {
     // inner points
+    #pragma omp parallel for collapse(2)
     for(int i=w.x_start+1; i <= w.x_end-1 ; ++i)
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w1(i,j) = w.main_eq(i, j);
 
     // bot+1
     if(w.is_in(w.x_start, 1))
+        #pragma omp parallel for
         for(int i=w.x_start+1; i <= w.x_end-1; ++i)
             w1(i,1) = bot_1_bound_eq(w,i);
 
     // right
     if(w.is_in(M, w.y_start))
+        #pragma omp parallel for
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w1(M, j) = right_bound_eq(w, j);
     
     // left
     if(w.is_in(0, w.y_start))
+        #pragma omp parallel for
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w1(0, j) = left_bound_eq(w, j);
 
     // top
     if(w.is_in(w.x_start, N))
+        #pragma omp parallel for
         for(int i=w.x_start+1; i <= (w.x_end-1); ++i)
             w1(i,N) = top_bound_eq(w, i);
     
@@ -330,6 +345,7 @@ void apply_A(grid &w, grid &w1)
     
     // bottom
     if(w.is_in(w.x_start, 0))
+        #pragma omp parallel for
         for(int i=w.x_start; i <= w.x_end; ++i)
             w1(i,0) = phi(i, 0);
 }
@@ -338,6 +354,7 @@ void send_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
 {
         // sync
         if(xx != 0) {
+            #pragma omp parallel for
             for(int k=w.y_start; k <= w.y_end; ++k)
                 tmp[k-w.y_start] = w(w.x_start+1, k);
             int dest = (xx - 1) * nprocs_per_row + yy;
@@ -346,6 +363,7 @@ void send_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
 
         // sync
         if(xx != nprocs_per_row-1) {
+            #pragma omp parallel for
             for(int k=w.y_start; k <= w.y_end; ++k)
                 tmp[k-w.y_start] = w(w.x_end-1, k);
             int dest = (xx + 1) * nprocs_per_row + yy;
@@ -354,6 +372,7 @@ void send_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
 
         // sync
         if(yy != 0) {
+            #pragma omp parallel for
             for(int k=w.x_start; k <= w.x_end; ++k)
                 tmp[k-w.x_start] = w(k, w.y_start+1);
             int dest = xx * nprocs_per_row + (yy - 1);
@@ -362,6 +381,7 @@ void send_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
 
         // sync
         if(yy != nprocs_per_row-1) {
+            #pragma omp parallel for
             for(int k=w.x_start; k <= w.x_end; ++k)
                 tmp[k-w.x_start] = w(k, w.y_end-1);
             int dest = xx * nprocs_per_row + (yy + 1);
@@ -374,6 +394,7 @@ void recv_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
     if(xx != nprocs_per_row-1) {
         int src = (xx + 1) * nprocs_per_row + yy;
         MPI_Recv(tmp, w.y_end-w.y_start+1, MPI_DOUBLE, src, TAG_SYNC, MPI_COMM_WORLD, NULL);
+        #pragma omp parallel for
         for(int k=w.y_start; k <= w.y_end; ++k)
             w(w.x_end, k) = tmp[k-w.y_start];
     }
@@ -382,6 +403,7 @@ void recv_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
     if(xx != 0) {
         int src = (xx - 1) * nprocs_per_row + yy;
         MPI_Recv(tmp, w.y_end-w.y_start+1, MPI_DOUBLE, src, TAG_SYNC, MPI_COMM_WORLD, NULL);
+        #pragma omp parallel for
         for(int k=w.y_start; k <= w.y_end; ++k)
             w(w.x_start, k) = tmp[k-w.y_start];
     }
@@ -390,6 +412,7 @@ void recv_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
     if(yy != nprocs_per_row-1) {
         int src = xx * nprocs_per_row + (yy + 1);
         MPI_Recv(tmp, w.x_end-w.x_start+1, MPI_DOUBLE, src, TAG_SYNC, MPI_COMM_WORLD, NULL);
+        #pragma omp parallel for
         for(int k=w.x_start; k <= w.x_end; ++k)
             w(k, w.y_end) = tmp[k-w.x_start];
     }
@@ -398,6 +421,7 @@ void recv_sync(grid &w, double *tmp, int xx, int yy, int nprocs_per_row)
     if(yy != 0) {
         int src = xx * nprocs_per_row + (yy - 1);
         MPI_Recv(tmp, w.x_end-w.x_start+1, MPI_DOUBLE, src, TAG_SYNC, MPI_COMM_WORLD, NULL);
+        #pragma omp parallel for
         for(int k=w.x_start; k <= w.x_end; ++k)
             w(k, w.y_start) = tmp[k-w.x_start];
     }

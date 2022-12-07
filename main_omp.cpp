@@ -2,9 +2,11 @@
 #include <fstream>
 #include <iostream>
 #include <cstdlib>
+#include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include <mpi.h>
+#include <omp.h>
 #include <chrono>
 
 using namespace std;
@@ -20,10 +22,6 @@ using namespace std;
 
 #define eps (double)1e-6
 
-#define STATUS_CONTINUE (int)11
-#define STATUS_END (int)22
-
-#define TAG_STATUS (int)12345
 #define TAG_SYNC (int)123456
 #define TAG_TAU (int)1234567
 
@@ -72,7 +70,6 @@ double psi(size_t i, size_t j) { return (i ? 1 : -1) * k(i,j) * u_1(i,j); }
 
 double F(size_t i, size_t j) { return -u_lap(i, j) + q(i, j) * u(i, j); }
 
-
 class grid
 {
 private:
@@ -103,6 +100,7 @@ public:
     double main_eq(long i, long j) { return -lap_op(i, j) + q(i,j) * (*this)(i,j); }
     void main_eq(grid &dest)
     {
+        // #pragma omp parallel for
         for(long i=x_start+1; i <= x_end-1; ++i)
             for(long j=y_start+1; j <= y_end-1; ++j)
                 dest(i,j) = main_eq(i,j);
@@ -239,8 +237,6 @@ double bot1_l_point_eq(grid &f)
 void fill_B(grid &w)
 {
     // B side array
-
-    
     // inner
     for(int i=w.x_start+1; i <= w.x_end-1; ++i)
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
@@ -290,28 +286,30 @@ void fill_B(grid &w)
 
 void apply_A(grid &w, grid &w1)
 {
-    // inner points
-    for(int i=w.x_start+1; i <= w.x_end-1 ; ++i)
-        for(int j=w.y_start+1; j <= w.y_end-1; ++j)
-            w1(i,j) = w.main_eq(i, j);
+    w.main_eq(w1);
 
     // bot+1
-    if(w.is_in(w.x_start, 1))
+    if(w.is_in(w.x_start, 1)){
+        #pragma omp parallel for
         for(int i=w.x_start+1; i <= w.x_end-1; ++i)
             w1(i,1) = bot_1_bound_eq(w,i);
+    }
 
     // right
     if(w.is_in(M, w.y_start))
+        #pragma omp parallel for
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w1(M, j) = right_bound_eq(w, j);
     
     // left
     if(w.is_in(0, w.y_start))
+        #pragma omp parallel for
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w1(0, j) = left_bound_eq(w, j);
 
     // top
     if(w.is_in(w.x_start, N))
+        #pragma omp parallel for
         for(int i=w.x_start+1; i <= (w.x_end-1); ++i)
             w1(i,N) = top_bound_eq(w, i);
     
@@ -330,6 +328,7 @@ void apply_A(grid &w, grid &w1)
     
     // bottom
     if(w.is_in(w.x_start, 0))
+        #pragma omp parallel for
         for(int i=w.x_start; i <= w.x_end; ++i)
             w1(i,0) = phi(i, 0);
 }
@@ -422,8 +421,8 @@ int main(int argc, char **argv)
     for(int i=0; i <= N; ++i)
         y[i] = B_1 + i * h2;
 
-    int nprocs;
-    int rank;
+    int nprocs, rank;
+    int nthreads, tid;
 
     MPI_Init(&argc, &argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -454,39 +453,28 @@ int main(int argc, char **argv)
     int cnt = x_end-x_start+10;
     double *tmp = new double [cnt];
 
-    int status = STATUS_CONTINUE;
-    
     int max_iter = 50000;
 
 
-    for(int it=0; (it <= max_iter) && (status == STATUS_CONTINUE); ++it)
+    for(int it=0; it <= max_iter; ++it)
     {
         apply_A(w, Aw);
         Aw.sub(B, r);
 
         send_sync(r, tmp, xx, yy, nprocs_per_row);
         recv_sync(r, tmp, xx, yy, nprocs_per_row);
+        
         apply_A(r, Ar);
         
 
-        double Ar_r_total;
-        double Ar_r_local = Ar.dot_prod(r);
-        double Ar_Ar_total;
-        double Ar_Ar_local = Ar.dot_prod(Ar);
+        double Ar_x_r = Ar.dot_prod(r);
+        double Ar_x_Ar = Ar.dot_prod(Ar);
 
         double tau;
 
-        MPI_Reduce(&Ar_r_local, &Ar_r_total, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-        MPI_Reduce(&Ar_Ar_local, &Ar_Ar_total, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
-        if(!rank) {
-            tau = Ar_r_total / Ar_Ar_total;
-            for(int k=1; k < nprocs; ++k)
-                MPI_Send(&tau, 1, MPI_DOUBLE, k, TAG_TAU, MPI_COMM_WORLD);
-        }
-        else 
-            MPI_Recv(&tau, 1, MPI_DOUBLE, 0, TAG_TAU, MPI_COMM_WORLD, NULL);
-
+        MPI_Allreduce(MPI_IN_PLACE, &Ar_x_r, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &Ar_x_Ar, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        tau = Ar_x_r / Ar_x_Ar;
 
         for(int i=x_start; i <= x_end; ++i)
             for(int j=y_start; j <= y_end; ++j)
@@ -498,30 +486,34 @@ int main(int argc, char **argv)
 
         double err = w1.max_norm();
         
-        double true_err;
-        MPI_Reduce(&err, &true_err, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         
         send_sync(w, tmp, xx, yy, nprocs_per_row);
         recv_sync(r, tmp, xx, yy, nprocs_per_row);
 
-        if(rank == 0){
+        if(rank == 0)
             if(it % (max_iter / 10) == 0)
-                std::cout << "Iter " << it << " : " << true_err << std::endl;
-            if (true_err < eps)
-                status = STATUS_END;
-            for(int k=1; k < nprocs; ++k)
-                MPI_Send(&status, 1, MPI_INT, k, TAG_STATUS, MPI_COMM_WORLD);
-        }
-
-        if(rank != 0)
-            MPI_Recv(&status, 1, MPI_INT, 0, TAG_STATUS, MPI_COMM_WORLD, NULL);
+                std::cout << "Iter " << it << " : " << err << std::endl;
+        
+        if(err < eps) break;
 
     }
+
+    #pragma omp parallel for collapse(2)
+    for(int i=x_start; i <= x_end; ++i)
+        for(int j=y_start; j <= y_end; ++j)
+            w1(i,j) = u(i, j);
+
+    double local_max = w1.max_norm();
+    MPI_Allreduce(MPI_IN_PLACE, &local_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+
     if(!rank){ 
-        auto end = std::chrono::steady_clock::now();
-        std::cout << "Time taken (ms) : ";
-        std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() << std::endl;
+        std::chrono::duration<double> dur = std::chrono::steady_clock::now() - start;
+        printf("grid: %ldx%ld, procs: %d, threads: %d, time: %f, max_err: %f\n",
+                M, N, nprocs, omp_get_max_threads(), dur.count(), local_max);
     }
+
     MPI_Finalize();
     return 0;
 }
