@@ -3,10 +3,10 @@
 #include <iostream>
 #include <cstdlib>
 #include <cstdio>
-#include <algorithm>
+// #include <algorithm>
 #include <cmath>
 #include <mpi.h>
-#include <omp.h>
+// #include <omp.h>
 #include <chrono>
 
 using namespace std;
@@ -44,31 +44,31 @@ class grid;
 
 double w_axb_x(grid &f, long i, long j);
 
-double w_byb_y(grid &f, size_t i, size_t j);
+double w_byb_y(grid &f, long i, long j);
 
 // (x+y)^2
-double xy_sq(size_t i, size_t j) { return (x[i]+y[j])*(x[i]+y[j]); }
+double xy_sq(long i, long j) { return (x[i]+y[j])*(x[i]+y[j]); }
 
-double u(size_t i, size_t j) { return exp(1.0 - xy_sq(i,j)); }
+double u(long i, long j) { return exp(1.0 - xy_sq(i,j)); }
 
-double u_1(size_t i, size_t j) { return -2 * (x[i]+y[j]) * u(i,j); }
+double u_1(long i, long j) { return -2 * (x[i]+y[j]) * u(i,j); }
 
-double k(size_t i, size_t j) { return 4 + x[i]; }
+double k(long i, long j) { return 4 + x[i]; }
 
-double u_lap(size_t i, size_t j)
+double u_lap(long i, long j)
 {
     return  8 * k(i,j) * u(i, j) * xy_sq(i,j) - 
             2 * u(i,j) * (x[i] + y[j]) -
             4 * k(i,j) * u(i, j);
 }
 
-double q(size_t i, size_t j) { return xy_sq(i,j); }
+double q(long i, long j) { return xy_sq(i,j); }
 
-double phi(size_t i, size_t j) { return u(i,j); }
+double phi(long i, long j) { return u(i,j); }
 
-double psi(size_t i, size_t j) { return (i ? 1 : -1) * k(i,j) * u_1(i,j); }
+double psi(long i, long j) { return (i ? 1 : -1) * k(i,j) * u_1(i,j); }
 
-double F(size_t i, size_t j) { return -u_lap(i, j) + q(i, j) * u(i, j); }
+double F(long i, long j) { return -u_lap(i, j) + q(i, j) * u(i, j); }
 
 class grid
 {
@@ -100,7 +100,6 @@ public:
     double main_eq(long i, long j) { return -lap_op(i, j) + q(i,j) * (*this)(i,j); }
     void main_eq(grid &dest)
     {
-        // #pragma omp parallel for
         for(long i=x_start+1; i <= x_end-1; ++i)
             for(long j=y_start+1; j <= y_end-1; ++j)
                 dest(i,j) = main_eq(i,j);
@@ -109,10 +108,10 @@ public:
     double dot_prod(grid &other)
     {
         double res = 0;
-        for(size_t i = x_start + (x_start != 0); i <= x_end - (x_end != M); ++i)
+        for(long i = x_start + (x_start != 0); i <= x_end - (x_end != M); ++i)
         {
             double col_sum = 0;
-            for(size_t j = y_start + 1; j <= y_end-1; ++j)
+            for(long j = y_start + 1; j <= y_end-1; ++j)
                 col_sum += (*this)(i,j) * other(i,j);
             col_sum += (*this)(i,y_end) * other(i,y_end) * (y_end == N ? 0.5 : 0.0);
 
@@ -131,8 +130,8 @@ public:
     double max_norm()
     {
         double norm = abs((*this)(x_start+1, y_start+1));
-        for(size_t i = x_start + (x_start != 0); i <= x_end - (x_end != M); ++i)
-            for(size_t j = y_start + (y_start != 0); j <= y_end - (y_end != N); ++j)
+        for(long i = x_start + (x_start != 0); i <= x_end - (x_end != M); ++i)
+            for(long j = y_start + (y_start != 0); j <= y_end - (y_end != N); ++j)
                 norm = max(norm, abs((*this)(i,j)));
         return norm;
     }
@@ -171,31 +170,31 @@ double bwd_diff_y(grid &f, long i, long j)
 double w_axb_x(grid &f, long i, long j)
 { return (a(i+1,j) * fwd_diff_x(f,i,j) - a(i,j) * bwd_diff_x(f,i,j)) / h1; }
 
-double w_byb_y(grid &f, size_t i, size_t j)
+double w_byb_y(grid &f, long i, long j)
 { return (b(i,j+1) * fwd_diff_y(f,i,j) - b(i,j) * bwd_diff_y(f,i,j)) / h2; }
 
 // i == M
-double right_bound_eq(grid &f, size_t j)
+double right_bound_eq(grid &f, long j)
 {
     return  2 * a(M, j) * bwd_diff_x(f,M,j) / h1 +
             q(M,j) * f(M,j) - w_byb_y(f,M,j);
 }
 
 // i == 0
-double left_bound_eq(grid &f, size_t j)
+double left_bound_eq(grid &f, long j)
 {
     return  -2 * a(1,j) * bwd_diff_x(f,1,j) / h1 +
             q(0,j) * f(0,j) - w_byb_y(f,0,j);
 }
 
 // j == N
-double top_bound_eq(grid &f, size_t i)
+double top_bound_eq(grid &f, long i)
 {
     return  2 * b(i,N) * bwd_diff_y(f,i,N) / h2 +
             q(i,N) * f(i,N) - w_axb_x(f, i, N);
 }
 
-double bot_1_bound_eq(grid &f, size_t i)
+double bot_1_bound_eq(grid &f, long i)
 {
     return  -w_axb_x(f,i,1) -
             (b(i,2) * bwd_diff_y(f,i,2) - b(i,1) * f(i,1) / h2) / h2 +
@@ -290,26 +289,22 @@ void apply_A(grid &w, grid &w1)
 
     // bot+1
     if(w.is_in(w.x_start, 1)){
-        #pragma omp parallel for
         for(int i=w.x_start+1; i <= w.x_end-1; ++i)
             w1(i,1) = bot_1_bound_eq(w,i);
     }
 
     // right
     if(w.is_in(M, w.y_start))
-        #pragma omp parallel for
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w1(M, j) = right_bound_eq(w, j);
     
     // left
     if(w.is_in(0, w.y_start))
-        #pragma omp parallel for
         for(int j=w.y_start+1; j <= w.y_end-1; ++j)
             w1(0, j) = left_bound_eq(w, j);
 
     // top
     if(w.is_in(w.x_start, N))
-        #pragma omp parallel for
         for(int i=w.x_start+1; i <= (w.x_end-1); ++i)
             w1(i,N) = top_bound_eq(w, i);
     
@@ -328,7 +323,6 @@ void apply_A(grid &w, grid &w1)
     
     // bottom
     if(w.is_in(w.x_start, 0))
-        #pragma omp parallel for
         for(int i=w.x_start; i <= w.x_end; ++i)
             w1(i,0) = phi(i, 0);
 }
@@ -458,6 +452,7 @@ int main(int argc, char **argv)
 
     for(int it=0; it <= max_iter; ++it)
     {
+
         apply_A(w, Aw);
         Aw.sub(B, r);
 
@@ -499,7 +494,6 @@ int main(int argc, char **argv)
 
     }
 
-    #pragma omp parallel for collapse(2)
     for(int i=x_start; i <= x_end; ++i)
         for(int j=y_start; j <= y_end; ++j)
             w1(i,j) = u(i, j);
@@ -510,8 +504,10 @@ int main(int argc, char **argv)
 
     if(!rank){ 
         std::chrono::duration<double> dur = std::chrono::steady_clock::now() - start;
-        printf("grid: %ldx%ld, procs: %d, threads: %d, time: %f, max_err: %f\n",
-                M, N, nprocs, omp_get_max_threads(), dur.count(), local_max);
+        printf("grid: %ldx%ld, procs: %d, time: %f, max_err: %f\n",
+                M, N, nprocs, dur.count(), local_max);
+        // printf("grid: %ldx%ld, procs: %d, threads: %d, time: %f, max_err: %f\n",
+        //         M, N, nprocs, omp_get_max_threads(), dur.count(), local_max);
     }
 
     MPI_Finalize();
